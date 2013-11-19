@@ -40,7 +40,7 @@ class FabTaskIt(object):
             if os.path.exists(envdirshome):
                 self.load_envdirs(envdirshome)
 
-            hostshome = os.path.join(fabhome, 'fabhosts')
+            hostshome = os.path.join(fabhome, 'hosts')
             if os.path.exists(hostshome):
                 self.load_hosts(hostshome)
 
