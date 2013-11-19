@@ -1,8 +1,7 @@
 import imp
 import os
-import sys
 
-from fabric.api import task, run, puts, env, local
+from fabric.api import task, puts, env, local
 from fabric.tasks import Task
 from fabric.utils import abort
 
@@ -29,8 +28,6 @@ class FabTaskIt(object):
             #self.boto_ec2_elb = boto.ec2.elb
         except ImportError:
             self.AWS_SUPPORT = True
-
-
 
     def setup(self):
         fabhome = os.path.expanduser('~/.fab-task-it')
@@ -65,7 +62,6 @@ class FabTaskIt(object):
                     env_vars[filename] = f.readline().rstrip("\n")
         return env_vars
 
-
     def load_hosts(self, hostsdir):
         for root, dirs, files in os.walk(hostsdir):
             for filename in files:
@@ -91,8 +87,8 @@ class FabTaskIt(object):
             os.environ[k] = v
 
     def load_host_environments(self, fabhost):
-        for env in fabhost['settings'].ENVIRONMENTS:
-            self.load_environment(env)
+        for host_env in fabhost['settings'].ENVIRONMENTS:
+            self.load_environment(host_env)
 
     def get_host_port(self, hostname=None):
         if hostname is None:
@@ -170,9 +166,9 @@ class AWSTask(Task):
         self.func = func
 
     def run(self, *args, **kwargs):
-        if not fab_task_it.AWS_SUPPORT:
+        if not fabtaskit.AWS_SUPPORT:
             abort('No aws support! Install boto.')
-        for envvar in fab_task_it.AWS_REQUIRED_VARS:
+        for envvar in fabtaskit.AWS_REQUIRED_VARS:
             if envvar not in os.environ:
                 abort('AWS environment not configured properly!')
         return self.func(*args, **kwargs)
@@ -213,6 +209,7 @@ def find_ec2_by_name(name):
     if ec2 is None:
         abort("Couldn't find '{}'".format(name))
     print_ec2(ec2)
+
 
 @task
 def login():
