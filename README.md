@@ -22,16 +22,12 @@ $ mkdir $HOME/.fab-task-it/envdirs/amazon
 And now just create the environment variables. Example:
 
 <pre>
-$ echo 'eu-west-1b' > \
-> HOME/.fab-task-it/envdirs/amazon/AWS_AVAILABILITY_ZONE
-$ echo 'mykeypairname' > \
-> $HOME/.fab-task-it/envdirs/amazon/AWS_KEYPAIR_NAME
-$ echo 'eu-west-1' > \
-> $HOME/.fab-task-it/envdirs/amazon/AWS_REGION
-$ echo 'XXXXXXXXXXXXXXXXXXXX' > \
-> $HOME/.fab-task-it/envdirs/amazon/AWS_ACCESS_KEY_ID
-$ echo 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > \
-> $HOME/.fab-task-it/envdirs/amazon/AWS_SECRET_ACCESS_KEY
+$ cd $HOME/.fab-task-it/envdirs/amazon/
+$ echo 'eu-west-1b' > AWS_AVAILABILITY_ZONE
+$ echo 'mykeypairname' > AWS_KEYPAIR_NAME
+$ echo 'eu-west-1' > AWS_REGION
+$ echo 'XXXXXXXXXXXXXXXXXXXX' > AWS_ACCESS_KEY_ID
+$ echo 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > AWS_SECRET_ACCESS_KEY
 </pre>
 
 All set! Now you can use the command `fab env_amazon list_all_ec2` to list all
