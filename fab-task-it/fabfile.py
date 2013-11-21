@@ -1,7 +1,7 @@
 import imp
 import os
 
-from fabric.api import task, puts, env, local
+from fabric.api import task, puts, env, local, sudo
 from fabric.tasks import Task
 from fabric.utils import abort
 
@@ -224,3 +224,20 @@ def list_all_ec2():
     instances = ec2.get_all_instances()
     for reservation in instances:
         print_ec2(reservation.instances[0])
+
+
+@task
+def supervisor_restart(service):
+    sudo('supervisorctl restart {0}'.format(service))
+
+
+@task
+def supervisor_status():
+    sudo('supervisorctl status')
+
+
+@task
+def tailf(filepath):
+    env.output_prefix = False
+    sudo('tail -f {0}'.format(filepath))
+    env.output_prefix = True
