@@ -1,9 +1,80 @@
 import imp
 import os
+import re
 
-from fabric.api import task, puts, env, local, sudo
+from fabric.api import task, puts, env, local, sudo, run, execute, lcd
 from fabric.tasks import Task
 from fabric.utils import abort
+
+
+try:
+    import boto.ec2
+    AWS_SUPPORT = True
+    #import boto.ec2.elb
+    #self.boto_ec2 = boto.ec2
+    #self.boto_ec2_elb = boto.ec2.elb
+except ImportError:
+    AWS_SUPPORT = False
+
+ip_re = re.compile('(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
+
+env.aptitude = "sudo aptitude -q -y"
+
+
+def _get_ec2_connection():
+    return boto.ec2.connect_to_region(
+        os.environ.get('AWS_REGION', 'eu-west-1'))
+
+
+def _find_ec2_by_name(name):
+    ec2 = _get_ec2_connection()
+    instances = ec2.get_all_instances(
+        filters={'tag:Name': name})
+    if len(instances) == 0:
+        return None
+    elif len(instances) > 1:
+        puts("Found more than one!")
+        return None
+    reservation = instances[0]
+    return reservation.instances[0]
+
+
+class BaseHost(object):
+
+    def __init__(self, settings):
+        self.settings = settings
+
+    def get_host_user(self):
+        return getattr(self.settings, 'SSH_USER', env.user)
+
+
+class EC2Host(BaseHost):
+
+    def __init__(self, *args, **kwargs):
+        super(EC2Host, self).__init__(*args, **kwargs)
+
+    def get_ip(self):
+        ec2 = _find_ec2_by_name(self.settings.EC2_NAME)
+        return ec2.ip_address
+
+
+class VagrantHost(BaseHost):
+
+    def __init__(self, *args, **kwargs):
+        super(VagrantHost, self).__init__(*args, **kwargs)
+        self.vagrant_dir = os.path.dirname(self.settings.VAGRANT_FILE)
+
+    def get_ip(self):
+        ro = re.compile(r'^\s+config.+:private_network')
+        with open(self.settings.VAGRANT_FILE, 'r') as vf:
+            for line in vf:
+                mo = ro.search(line)
+                if mo is None:
+                    continue
+                mo = ip_re.search(line)
+                if mo is not None:
+                    return mo.group('ip')
+        return None
 
 
 class FabTaskIt(object):
@@ -19,15 +90,6 @@ class FabTaskIt(object):
         self.fabhosts = {}
         self.fabenvdirs = {}
         self.activated_hosts = []
-        self.AWS_SUPPORT = True
-
-        try:
-            import boto.ec2
-            #import boto.ec2.elb
-            self.boto_ec2 = boto.ec2
-            #self.boto_ec2_elb = boto.ec2.elb
-        except ImportError:
-            self.AWS_SUPPORT = True
 
     def setup(self):
         fabhome = os.path.expanduser('~/.fab-task-it')
@@ -75,6 +137,10 @@ class FabTaskIt(object):
                         os.path.join(hostsdir, filename)
                     )
                     self.fabhosts[fabhost['name']] = fabhost
+                    if fabhost['settings'].HOST_TYPE == 'EC2':
+                        fabhost['helper'] = EC2Host(fabhost['settings'])
+                    elif fabhost['settings'].HOST_TYPE == 'VAGRANT':
+                        fabhost['helper'] = VagrantHost(fabhost['settings'])
                 except ImportError:
                     puts("host [{}] initialization failed.".format(filename))
 
@@ -89,19 +155,22 @@ class FabTaskIt(object):
     def load_host_environments(self, fabhost):
         for host_env in fabhost['settings'].ENVIRONMENTS:
             self.load_environment(host_env)
+        env.user = self.get_host_user(fabhost['name'])
 
     def get_host_port(self, hostname=None):
         if hostname is None:
             hostname = self.activated_hosts[0]
         return getattr(self.fabhosts[hostname]['settings'], 'SSH_PORT', 22)
 
+    def get_host_user(self, hostname=None):
+        if hostname is None:
+            hostname = self.activated_hosts[0]
+        return self.fabhosts[hostname]['helper'].get_host_user()
+
     def activate_host(self, host):
         fabhost = self.fabhosts[host]
         self.load_host_environments(fabhost)
-        if fabhost['settings'].HOST_TYPE == 'EC2':
-            ec2 = self.find_ec2_by_name(fabhost['settings'].EC2_NAME)
-            env.hosts.append(ec2.ip_address)
-
+        env.hosts.append(fabhost['helper'].get_ip())
         self.activated_hosts.append(fabhost['name'])
 
     def get_activate_host_func(self, host):
@@ -131,24 +200,35 @@ class FabTaskIt(object):
                 name='env_{}'.format(self.fabenvdirs[env]['name']),
             )
 
-    def get_ec2_connection(self):
-        assert(self.AWS_SUPPORT)
-        region = os.environ.get('AWS_REGION', 'eu-west-1')
-        ec2 = self.boto_ec2.connect_to_region(region)
-        #self.boto_ec2_elb.connect_to_region(region)
-        return ec2
+    def get_available_files(self, *filenames):
+        result = []
+        for filename in filenames:
+            pth = os.path.expanduser(filename)
+            if os.path.exists(pth):
+                result.append(pth)
+        return result
 
-    def find_ec2_by_name(self, name):
-        ec2 = self.get_ec2_connection()
-        instances = ec2.get_all_instances(
-            filters={'tag:Name': name})
-        if len(instances) == 0:
-            return None
-        elif len(instances) > 1:
-            puts("Found more than one!")
-            return None
-        reservation = instances[0]
-        return reservation.instances[0]
+    def get_ssh_private_key_files(self):
+        return self.get_available_files('~/.ssh/id_dsa', '~/.ssh/id_rsa')
+
+    def get_ssh_public_key_files(self):
+        return self.get_available_files('~/.ssh/id_dsa.pub',
+                                        '~/.ssh/id_rsa.pub')
+
+    def get_ssh_command(self):
+        port = self.get_host_port()
+        user = self.get_host_user()
+        host = env.hosts[0]
+        return 'ssh -p {port} -l {user} {host}'.format(
+            host=host,
+            port=port,
+            user=user,
+        )
+
+    def get_active_host_helper(self, hostname=None):
+        if hostname is None:
+            hostname = self.activated_hosts[0]
+        return self.fabhosts[hostname]['helper']
 
 
 class SimpleTask(Task):
@@ -166,7 +246,7 @@ class AWSTask(Task):
         self.func = func
 
     def run(self, *args, **kwargs):
-        if not fabtaskit.AWS_SUPPORT:
+        if not AWS_SUPPORT:
             abort('No aws support! Install boto.')
         for envvar in fabtaskit.AWS_REQUIRED_VARS:
             if envvar not in os.environ:
@@ -205,7 +285,7 @@ def test_environment():
 
 @task(task_class=AWSTask)
 def find_ec2_by_name(name):
-    ec2 = fabtaskit.find_ec2_by_name(name)
+    ec2 = _find_ec2_by_name(name)
     if ec2 is None:
         abort("Couldn't find '{}'".format(name))
     print_ec2(ec2)
@@ -213,14 +293,12 @@ def find_ec2_by_name(name):
 
 @task
 def login():
-    port = fabtaskit.get_host_port()
-    host = env.hosts[0]
-    local('ssh -p {port} {host}'.format(host=host, port=port))
+    local(fabtaskit.get_ssh_command())
 
 
 @task
 def list_all_ec2():
-    ec2 = fabtaskit.get_ec2_connection()
+    ec2 = _get_ec2_connection()
     instances = ec2.get_all_instances()
     for reservation in instances:
         print_ec2(reservation.instances[0])
@@ -241,3 +319,54 @@ def tailf(filepath):
     env.output_prefix = False
     sudo('tail -f {0}'.format(filepath))
     env.output_prefix = True
+
+
+@task
+def copy_ssh_pub_keys():
+    keys = []
+
+    for filename in fabtaskit.get_ssh_public_key_files():
+        try:
+            with open(filename, 'r') as f:
+                keys.append(f.readline().rstrip("\n"))
+        except IOError:
+            pass
+
+    puts('Got {} keys'.format(len(keys)))
+
+    ssh_cmd = fabtaskit.get_ssh_command()
+
+    result = local(
+        "{ssh_cmd} 'cat .ssh/authorized_keys'".format(ssh_cmd=ssh_cmd),
+        capture=True,
+    )
+    for key in keys:
+        if result.find(key) < 0:
+            puts('not found key:')
+            puts(key)
+            local("""{ssh_cmd} 'echo "{key}" >> .ssh/authorized_keys'"""
+                  .format(ssh_cmd=ssh_cmd, key=key))
+
+
+@task
+def aptitude_update():
+    run("{0} update".format(env.aptitude), quiet=True)
+
+
+@task
+def aptitude_safe_upgrade():
+    execute(aptitude_update)
+    run("{0} safe-upgrade".format(env.aptitude))
+
+@task
+def vagrant_up():
+    vagrant = fabtaskit.get_active_host_helper()
+    with lcd(vagrant.vagrant_dir):
+        local('vagrant up')
+
+
+@task
+def vagrant_halt():
+    vagrant = fabtaskit.get_active_host_helper()
+    with lcd(vagrant.vagrant_dir):
+        local('vagrant halt')
