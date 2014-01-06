@@ -270,6 +270,13 @@ def print_ec2(ec2):
     puts("Public IP: {}".format(ec2.ip_address))
     puts("Private DNS: {}".format(ec2.private_dns_name))
     puts("Private IP: {}".format(ec2.private_ip_address))
+    # http://docs.pythonboto.org/en/latest/ref/ec2.html \
+    #   #boto.ec2.instance.Instance.get_attribute
+    ia = ec2.get_attribute('disableApiTermination')
+    puts("Termination Protection: {}".format(ia['disableApiTermination']))
+    ia = ec2.get_attribute('instanceInitiatedShutdownBehavior')
+    puts("Shutdown Behavior: {}".format(
+        ia['instanceInitiatedShutdownBehavior']))
     puts("")
 
 
@@ -358,6 +365,7 @@ def aptitude_safe_upgrade():
     execute(aptitude_update)
     run("{0} safe-upgrade".format(env.aptitude))
 
+
 @task
 def vagrant_up():
     vagrant = fabtaskit.get_active_host_helper()
@@ -370,3 +378,14 @@ def vagrant_halt():
     vagrant = fabtaskit.get_active_host_helper()
     with lcd(vagrant.vagrant_dir):
         local('vagrant halt')
+
+
+@task(task_class=AWSTask)
+def ec2_terminate(name):
+    ec2 = _find_ec2_by_name(name)
+    if ec2 is None:
+        abort("Couldn't find '{}'".format(name))
+    try:
+        ec2.terminate()
+    except boto.exception.EC2ResponseError as ex:
+        puts("[{}] {}".format(ex.error_code, ex.message))
