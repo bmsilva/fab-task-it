@@ -182,7 +182,7 @@ class FabTaskIt(object):
         for i, host in enumerate(self.fabhosts.keys()):
             globals()['host_{}'.format(i)] = SimpleTask(
                 self.get_activate_host_func(host),
-                name=host
+                name='host_{}'.format(host),
             )
 
     def activate_environment(self, fabenv):
