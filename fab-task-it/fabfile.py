@@ -1,6 +1,7 @@
 import imp
 import os
 import re
+import time
 
 from fabric.api import task, puts, env, local, sudo, run, execute, lcd
 from fabric.tasks import Task
@@ -26,17 +27,16 @@ def _get_ec2_connection():
         os.environ.get('AWS_REGION', 'eu-west-1'))
 
 
-def _find_ec2_by_name(name):
+def _find_ec2_by_name(name, state='running'):
     ec2 = _get_ec2_connection()
-    instances = ec2.get_all_instances(
-        filters={'tag:Name': name})
-    if len(instances) == 0:
+    reservations = ec2.get_all_instances(
+        filters={'tag:Name': name, 'instance-state-name': state})
+    if len(reservations) == 0:
         return None
-    elif len(instances) > 1:
-        puts("Found more than one!")
-        return None
-    reservation = instances[0]
-    return reservation.instances[0]
+    elif len(reservations) == 1:
+        return reservations[0].instances[0]
+    puts("Found more than one!")
+    return None
 
 
 class BaseHost(object):
@@ -90,6 +90,7 @@ class FabTaskIt(object):
         self.fabhosts = {}
         self.fabenvdirs = {}
         self.activated_hosts = []
+        self.amis = {}
 
     def setup(self):
         fabhome = os.path.expanduser('~/.fab-task-it')
@@ -102,6 +103,12 @@ class FabTaskIt(object):
             hostshome = os.path.join(fabhome, 'hosts')
             if os.path.exists(hostshome):
                 self.load_hosts(hostshome)
+
+            ec2home = os.path.join(fabhome, 'ec2')
+            if os.path.exists(ec2home):
+                ami_list_file = os.path.join(ec2home, 'amis.py')
+                if os.path.exists(ami_list_file):
+                    self.load_amis(ami_list_file)
 
         self.setup_hosts()
         self.setup_environments()
@@ -143,6 +150,16 @@ class FabTaskIt(object):
                         fabhost['helper'] = VagrantHost(fabhost['settings'])
                 except ImportError:
                     puts("host [{}] initialization failed.".format(filename))
+
+    def load_amis(self, filename):
+        try:
+            self.amis_module = imp.load_source(
+                'fabamis.amis',
+                filename,
+            )
+            self.amis = self.amis_module.AMIS
+        except ImportError:
+            abort("amis file [{}] initialization failed.".format(filename))
 
     def load_environment(self, fabenv):
         envdir = self.fabenvdirs.get(fabenv, None)
@@ -219,10 +236,16 @@ class FabTaskIt(object):
         port = self.get_host_port()
         user = self.get_host_user()
         host = env.hosts[0]
-        return 'ssh -p {port} -l {user} {host}'.format(
+        hostname = self.activated_hosts[0]
+        ssh_key_str = getattr(self.fabhosts[hostname]['settings'],
+            'SSH_KEY', ' ')
+        if ssh_key_str != ' ':
+            ssh_key_str = ' -i {} '.format(ssh_key_str)
+        return 'ssh -p {port} -l {user}{ssh_key}{host}'.format(
             host=host,
             port=port,
             user=user,
+            ssh_key=ssh_key_str,
         )
 
     def get_active_host_helper(self, hostname=None):
@@ -304,7 +327,7 @@ def login():
 
 
 @task
-def list_all_ec2():
+def ec2_list_all():
     ec2 = _get_ec2_connection()
     instances = ec2.get_all_instances()
     for reservation in instances:
@@ -387,5 +410,61 @@ def ec2_terminate(name):
         abort("Couldn't find '{}'".format(name))
     try:
         ec2.terminate()
+        puts("Instance terminated!!")
+    except boto.exception.EC2ResponseError as ex:
+        puts("[{}] {}".format(ex.error_code, ex.message))
+
+
+@task(task_class=AWSTask)
+def ec2_run_instances(ami_name, tag_name):
+    ec2 = _get_ec2_connection()
+    ami = fabtaskit.amis.get(ami_name)
+    if ami is None:
+        abort("Couldn't find ami conf with name: {}".format(ami_name))
+    reservation = ec2.run_instances(
+        image_id=ami['image_id'],
+        key_name=ami['key_name'],
+        security_groups=ami['security_groups'],
+        instance_type=ami['instance_type'],
+        placement=ami['placement'],
+        instance_initiated_shutdown_behavior=ami[
+            'instance_initiated_shutdown_behavior'],
+    )
+    instance = reservation.instances[0]
+    ec2.create_tags([instance.id], {'Name': tag_name})
+    tries = 5
+    booted = False
+    while not booted and tries != 0:
+        time.sleep(5)
+        for r in ec2.get_all_instances():
+            if r.id == reservation.id:
+                print_ec2(r.instances[0])
+                booted = True
+                break
+        tries -= 1
+    if not booted:
+        abort("Couldn't find if instance booted")
+
+
+@task(task_class=AWSTask)
+def ec2_stop_instance(name):
+    ec2 = _find_ec2_by_name(name)
+    if ec2 is None:
+        abort("Couldn't find '{}'".format(name))
+    try:
+        ec2.stop()
+        puts("Instance stopped!!")
+    except boto.exception.EC2ResponseError as ex:
+        puts("[{}] {}".format(ex.error_code, ex.message))
+
+
+@task(task_class=AWSTask)
+def ec2_start_instance(name):
+    ec2 = _find_ec2_by_name(name, state='stopped')
+    if ec2 is None:
+        abort("Couldn't find '{}'".format(name))
+    try:
+        ec2.start()
+        puts("Instance started!!")
     except boto.exception.EC2ResponseError as ex:
         puts("[{}] {}".format(ex.error_code, ex.message))
