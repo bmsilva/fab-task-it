@@ -314,7 +314,7 @@ def test_environment():
 
 
 @task(task_class=AWSTask)
-def find_ec2_by_name(name):
+def ec2_find_by_name(name):
     ec2 = _find_ec2_by_name(name)
     if ec2 is None:
         abort("Couldn't find '{}'".format(name))
@@ -421,15 +421,9 @@ def ec2_run_instances(ami_name, tag_name):
     ami = fabtaskit.amis.get(ami_name)
     if ami is None:
         abort("Couldn't find ami conf with name: {}".format(ami_name))
-    reservation = ec2.run_instances(
-        image_id=ami['image_id'],
-        key_name=ami['key_name'],
-        security_groups=ami['security_groups'],
-        instance_type=ami['instance_type'],
-        placement=ami['placement'],
-        instance_initiated_shutdown_behavior=ami[
-            'instance_initiated_shutdown_behavior'],
-    )
+    kwargs = ami.copy()
+    kwargs['key_name'] = os.environ['AWS_KEYPAIR_NAME']
+    reservation = ec2.run_instances(**kwargs)
     instance = reservation.instances[0]
     ec2.create_tags([instance.id], {'Name': tag_name})
     tries = 5
