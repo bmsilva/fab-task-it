@@ -111,8 +111,8 @@ class FabTaskIt(object):
                 if os.path.exists(ami_list_file):
                     self.load_amis(ami_list_file)
 
-        self.setup_hosts()
-        self.setup_environments()
+        #self.setup_hosts()
+        #self.setup_environments()
 
     def load_envdirs(self, envdir):
         for envroot, envdirs, envfiles in os.walk(envdir):
@@ -472,6 +472,7 @@ def ec2_start_instance(name):
     except boto.exception.EC2ResponseError as ex:
         puts("[{}] {}".format(ex.error_code, ex.message))
 
+
 @task
 def pg_dump_gz(db, user='postgres'):
     today = datetime.date.today()
@@ -484,3 +485,17 @@ def pg_dump_gz(db, user='postgres'):
         user=user)
     get('/tmp/{}'.format(filename), './{}'.format(filename))
     #env.output_prefix = True
+
+
+@task(name='env', alias='e')
+def ftienv(envname):
+    fabtaskit.activate_environment(envname)
+
+
+@task(alias='h')
+def host(hostname=None):
+    if hostname is None:
+        for hostname in fabtaskit.fabhosts.keys():
+            puts(hostname)
+    else:
+        fabtaskit.activate_host(hostname)
