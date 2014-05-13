@@ -1,9 +1,10 @@
+import datetime
 import imp
 import os
 import re
 import time
 
-from fabric.api import task, puts, env, local, sudo, run, execute, lcd
+from fabric.api import task, puts, env, local, sudo, run, execute, lcd, get
 from fabric.tasks import Task
 from fabric.utils import abort
 
@@ -187,7 +188,12 @@ class FabTaskIt(object):
     def activate_host(self, host):
         fabhost = self.fabhosts[host]
         self.load_host_environments(fabhost)
-        env.hosts.append(fabhost['helper'].get_ip())
+        env.hosts.append(
+            '{ip}:{port}'.format(
+                ip=fabhost['helper'].get_ip(),
+                port=self.get_host_port(hostname=host),
+            )
+        )
         self.activated_hosts.append(fabhost['name'])
 
     def get_activate_host_func(self, host):
@@ -233,9 +239,12 @@ class FabTaskIt(object):
                                         '~/.ssh/id_rsa.pub')
 
     def get_ssh_command(self):
-        port = self.get_host_port()
         user = self.get_host_user()
-        host = env.hosts[0]
+        if ':' in env.hosts[0]:
+            (host, port) = env.hosts[0].split(':')
+        else:
+            host = env.hosts[0]
+            port = self.get_host_port()
         hostname = self.activated_hosts[0]
         ssh_key_str = getattr(self.fabhosts[hostname]['settings'],
             'SSH_KEY', ' ')
@@ -462,3 +471,16 @@ def ec2_start_instance(name):
         puts("Instance started!!")
     except boto.exception.EC2ResponseError as ex:
         puts("[{}] {}".format(ex.error_code, ex.message))
+
+@task
+def pg_dump_gz(db, user='postgres'):
+    today = datetime.date.today()
+    filename = '{year}{month:02}{day:02}_{dbname}.sql.gz'.format(
+        year=today.year, month=today.month, day=today.day, dbname=db)
+    #env.output_prefix = False
+    sudo(
+        'pg_dump {db} | gzip > /tmp/{filename}'.format(db=db,
+                                                       filename=filename),
+        user=user)
+    get('/tmp/{}'.format(filename), './{}'.format(filename))
+    #env.output_prefix = True
